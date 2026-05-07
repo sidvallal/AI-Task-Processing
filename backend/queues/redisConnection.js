@@ -3,33 +3,47 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const redisHost = process.env.REDIS_HOST || 'localhost';
+const redisPort = parseInt(process.env.REDIS_PORT, 10) || 6379;
+
 /**
- * Centralized Redis connection using ioredis.
- * This connection is shared across all BullMQ queues and workers.
- * Uses environment variables for host and port configuration.
+ * Shared Redis connection for BullMQ.
+ * Redis must be running before tasks can be queued or processed.
  */
 const redisConnection = new IORedis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT, 10) || 6379,
-  maxRetriesPerRequest: null, // Required by BullMQ to avoid timeout issues
+  host: redisHost,
+  port: redisPort,
+  maxRetriesPerRequest: null,
 });
 
-// --- Connection Event Handlers ---
+let redisRetryCount = 0;
+let hasLoggedRedisError = false;
 
 redisConnection.on('connect', () => {
-  console.log(`✅ Redis connected successfully at ${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`);
+  redisRetryCount = 0;
+  hasLoggedRedisError = false;
+  console.log(`Redis connected at ${redisHost}:${redisPort}`);
 });
 
 redisConnection.on('error', (err) => {
-  console.error('❌ Redis connection error:', err.message);
+  if (!hasLoggedRedisError) {
+    console.error(
+      `Redis connection failed at ${redisHost}:${redisPort}. Start Redis, or run the project with docker compose.`
+    );
+    console.error(err.message);
+    hasLoggedRedisError = true;
+  }
 });
 
 redisConnection.on('close', () => {
-  console.warn('⚠️  Redis connection closed');
+  console.warn('Redis connection closed');
 });
 
 redisConnection.on('reconnecting', () => {
-  console.log('🔄 Redis reconnecting...');
+  redisRetryCount += 1;
+  if (redisRetryCount === 1 || redisRetryCount % 5 === 0) {
+    console.log(`Redis reconnecting... attempt ${redisRetryCount}`);
+  }
 });
 
 export default redisConnection;

@@ -1,0 +1,105 @@
+name: Update Infra Image Tags
+
+on:
+  workflow_run:
+    workflows:
+      - Docker Build and Push
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Docker image tag to write into infra manifests
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-infra-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: false
+
+env:
+  INFRA_REPOSITORY: YOUR_GITHUB_ORG/ai-task-platform-infra
+  INFRA_BRANCH: main
+  DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_USERNAME }}
+
+jobs:
+  update-infra:
+    name: Update Kubernetes manifests
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Resolve image tag
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            IMAGE_TAG="${{ inputs.image_tag }}"
+            SOURCE_SHA="${{ github.sha }}"
+          else
+            IMAGE_TAG="$(echo "${{ github.event.workflow_run.head_sha }}" | cut -c1-7)"
+            SOURCE_SHA="${{ github.event.workflow_run.head_sha }}"
+          fi
+
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout infra repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.INFRA_REPOSITORY }}
+          ref: ${{ env.INFRA_BRANCH }}
+          token: ${{ secrets.INFRA_REPO_TOKEN }}
+          path: infra
+
+      - name: Update image tags in Kubernetes manifests
+        working-directory: infra
+        env:
+          IMAGE_TAG: ${{ steps.vars.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          update_image() {
+            local file="$1"
+            local image="$2"
+            local full_image="${DOCKERHUB_NAMESPACE}/${image}:${IMAGE_TAG}"
+
+            if [ ! -f "$file" ]; then
+              echo "Missing expected manifest: $file"
+              exit 1
+            fi
+
+            sed -i -E "s#image: .*/${image}:[A-Za-z0-9._-]+#image: ${full_image}#g" "$file"
+            sed -i -E "s#image: ${image}:[A-Za-z0-9._-]+#image: ${full_image}#g" "$file"
+          }
+
+          update_image "k8s/frontend/deployment.yaml" "frontend"
+          update_image "k8s/backend/deployment.yaml" "backend"
+          update_image "k8s/worker/deployment.yaml" "worker"
+
+          git diff -- k8s/frontend/deployment.yaml k8s/backend/deployment.yaml k8s/worker/deployment.yaml
+
+      - name: Commit and push infra changes
+        working-directory: infra
+        env:
+          IMAGE_TAG: ${{ steps.vars.outputs.image_tag }}
+          SOURCE_SHA: ${{ steps.vars.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet; then
+            echo "Infra manifests already use image tag ${IMAGE_TAG}."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add k8s/frontend/deployment.yaml k8s/backend/deployment.yaml k8s/worker/deployment.yaml
+          git commit -m "Deploy app images ${IMAGE_TAG}" -m "Source commit: ${SOURCE_SHA}"
+          git push origin "HEAD:${INFRA_BRANCH}"

@@ -19,7 +19,7 @@ app.use(helmet());
 
 // CORS configuration
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' ? 'https://your-production-url.com' : 'http://localhost:5173',
+  origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
   credentials: true
 }));
 
@@ -41,6 +41,10 @@ app.use('/api/tasks', taskRoutes);
 // Base route
 app.get('/', (req, res) => {
   res.send('API is running...');
+});
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok' });
 });
 
 // Error handling middleware
