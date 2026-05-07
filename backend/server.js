@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import connectDB from './config/db.js';
 import authRoutes from './routes/authRoutes.js';
+import taskRoutes from './routes/taskRoutes.js';
 
 dotenv.config();
 
@@ -35,6 +36,7 @@ app.use('/api/', limiter);
 
 // Mount routers
 app.use('/api/auth', authRoutes);
+app.use('/api/tasks', taskRoutes);
 
 // Base route
 app.get('/', (req, res) => {
