@@ -1,4 +1,5 @@
 import Task from '../models/Task.js';
+import taskQueue from '../queues/taskQueue.js';
 
 /**
  * @desc    Create a new task
@@ -24,7 +25,7 @@ export const createTask = async (req, res, next) => {
       );
     }
 
-    // Create task document in MongoDB
+    // Step 1: Create task document in MongoDB
     const task = await Task.create({
       userId: req.user._id,
       title,
@@ -35,9 +36,23 @@ export const createTask = async (req, res, next) => {
       logs: [],
     });
 
-    // Return success response with created task summary
+    // Step 2: Push job into Redis queue for future processing
+    try {
+      await taskQueue.add('process-task', {
+        taskId: task._id,
+        inputText: task.inputText,
+        operation: task.operation,
+      });
+
+      console.log(`📤 Task ${task._id} added to queue "task-processing"`);
+    } catch (queueError) {
+      // Task is saved in MongoDB but failed to enqueue — log and warn
+      console.error(`❌ Failed to enqueue task ${task._id}:`, queueError.message);
+    }
+
+    // Step 3: Return success response with created task summary
     res.status(201).json({
-      message: 'Task created successfully',
+      message: 'Task created and queued successfully',
       task: {
         _id: task._id,
         title: task.title,
